@@ -3,7 +3,7 @@
   "displayName": "Pixel Pets",
   "description": "A pixel-art pet that lives in your Explorer sidebar. Throw it a ball, pet it, and play rock paper scissors while your build runs.",
   "version": "0.2.0",
-  "publisher": "607e6476-e564-6ddc-ad3d-e9db3e10d08f",
+  "publisher": "Prtmplish",
   "license": "MIT",
   "icon": "images/icon.png",
   "engines": {
@@ -17,12 +17,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/prtmplish/pixel-pets.git"
+    "url": "https://github.com/Prtmplish/pixel-pets.git"
   },
   "bugs": {
-    "url": "https://github.com/prtmplish/pixel-pets/issues"
+    "url": "https://github.com/Prtmplish/pixel-pets/issues"
   },
-  "homepage": "https://github.com/prtmplish/pixel-pets#readme",
+  "homepage": "https://github.com/Prtmplish/pixel-pets#readme",
   "main": "./extension.js",
   "activationEvents": ["onStartupFinished"],
   "contributes": {
