@@ -1,0 +1,8 @@
+.vscode/**
+.qodo/**
+.github/**
+jsconfig.json
+.vscodeignore
+**/*.bak
+**/.gitignore
+**/*.vsix

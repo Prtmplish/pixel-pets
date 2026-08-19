@@ -1,0 +1,223 @@
+const vscode = require('vscode');
+const { Pet, SPECIES } = require('./pet');
+
+const EMPTY_STATS = { happiness: 60, petted: 0, wins: 0, losses: 0, draws: 0, streak: 0, best: 0 };
+const BEATS = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
+const HAND = { rock: '\u{1FAA8}', paper: '\u{1F4C4}', scissors: '✂️' };
+const MOVES = Object.keys(BEATS);
+const DECAY_MS = 5 * 60 * 1000;
+
+const pet = new Pet();
+/** @type {vscode.StatusBarItem} */
+let statusBar;
+/** @type {vscode.QuickPick<any> | undefined} */
+let quickPick;
+let errorCount = 0;
+
+function activate(context) {
+  statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusBar.command = 'codepet.pet';
+  context.subscriptions.push(statusBar, { dispose: () => pet.dispose() });
+
+  applyConfig(context);
+
+  const decay = setInterval(() => {
+    if (getStats(context).happiness > 0) bumpHappiness(context, -2);
+  }, DECAY_MS);
+  context.subscriptions.push({ dispose: () => clearInterval(decay) });
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('codepet.pet', () => petIt(context)),
+    vscode.commands.registerCommand('codepet.choose', () => choosePet()),
+    vscode.commands.registerCommand('codepet.toggle', () => toggle()),
+    vscode.commands.registerCommand('codepet.play', () => showPicker(context)),
+    vscode.commands.registerCommand('codepet.resetStats', async () => {
+      await context.globalState.update('codepet.stats', EMPTY_STATS);
+      refresh(context);
+      if (quickPick) quickPick.title = titleFor(context);
+    }),
+
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      const active = vscode.window.activeTextEditor;
+      if (active && e.document === active.document && e.contentChanges.length) pet.poke();
+    }),
+    vscode.workspace.onDidSaveTextDocument(() => {
+      pet.poke('happy', 2200);
+      bumpHappiness(context, 1);
+    }),
+    vscode.languages.onDidChangeDiagnostics(() => {
+      const active = vscode.window.activeTextEditor;
+      if (!active) return;
+      const errors = vscode.languages.getDiagnostics(active.document.uri)
+        .filter((d) => d.severity === vscode.DiagnosticSeverity.Error).length;
+      if (errors > errorCount) pet.poke('alert', 3500);
+      errorCount = errors;
+    }),
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      pet.clear();
+      if (editor) pet.line = editor.selection.active.line;
+    }),
+    vscode.window.onDidChangeWindowState((state) => {
+      if (state.focused) applyConfig(context);
+      else pet.stop();
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('codepet')) applyConfig(context);
+    })
+  );
+}
+
+function config() {
+  return vscode.workspace.getConfiguration('codepet');
+}
+
+function getStats(context) {
+  return Object.assign({}, EMPTY_STATS, context.globalState.get('codepet.stats', EMPTY_STATS));
+}
+
+function applyConfig(context) {
+  const cfg = config();
+  const species = cfg.get('species', 'cat');
+  pet.species = SPECIES[species] ? species : 'cat';
+  pet.follow = cfg.get('followCursor', true);
+  if (cfg.get('enabled', true)) pet.start();
+  else pet.stop();
+  refresh(context);
+}
+
+async function bumpHappiness(context, delta) {
+  const stats = getStats(context);
+  stats.happiness = Math.max(0, Math.min(100, stats.happiness + delta));
+  await context.globalState.update('codepet.stats', stats);
+  refresh(context);
+}
+
+function refresh(context) {
+  const stats = getStats(context);
+  pet.baseline = stats.happiness < 25 ? 'sad' : 'idle';
+
+  if (!config().get('showStatusBar', true)) {
+    statusBar.hide();
+    return;
+  }
+  const name = config().get('name', 'Pet');
+  const hearts = '♥'.repeat(Math.max(1, Math.round(stats.happiness / 25)));
+  statusBar.text = pet.glyph() + ' ' + name + ' ' + hearts;
+  statusBar.tooltip = name + ' the ' + (SPECIES[pet.species] || SPECIES.cat).label.toLowerCase() +
+    ' — ' + stats.happiness + '% happy, petted ' + stats.petted + ' times' +
+    '\nRock paper scissors: ' + stats.wins + '–' + stats.losses + '–' + stats.draws +
+    ' (best streak ' + stats.best + ')\nClick to pet.';
+  statusBar.show();
+}
+
+async function petIt(context) {
+  const stats = getStats(context);
+  stats.petted += 1;
+  stats.happiness = Math.min(100, stats.happiness + 6);
+  await context.globalState.update('codepet.stats', stats);
+  pet.poke('love', 3000);
+  refresh(context);
+}
+
+async function choosePet() {
+  const species = await vscode.window.showQuickPick(
+    Object.keys(SPECIES).map((key) => ({ label: SPECIES[key].walk + '  ' + SPECIES[key].label, key })),
+    { title: 'Which pet?', placeHolder: 'It lives at the end of your lines.' }
+  );
+  if (!species) return;
+
+  const name = await vscode.window.showInputBox({
+    title: 'Name your ' + SPECIES[species.key].label.toLowerCase(),
+    value: config().get('name', 'Pet'),
+    validateInput: (v) => (v && v.trim() ? undefined : 'Give it a name.')
+  });
+  if (name === undefined) return;
+
+  await config().update('species', species.key, vscode.ConfigurationTarget.Global);
+  await config().update('name', name.trim(), vscode.ConfigurationTarget.Global);
+}
+
+async function toggle() {
+  await config().update('enabled', !config().get('enabled', true), vscode.ConfigurationTarget.Global);
+}
+
+function titleFor(context, round) {
+  const s = getStats(context);
+  const name = config().get('name', 'Pet');
+  const tally = s.wins + '–' + s.losses + '–' + s.draws;
+  const streak = s.streak > 1 ? '  ·  streak ' + s.streak : '';
+  if (!round) return 'Rock paper scissors with ' + name + '  ·  ' + tally + streak;
+  return HAND[round.you] + ' vs ' + HAND[round.them] + '  ' + round.verdict +
+    '  ·  ' + tally + streak;
+}
+
+/** Floating overlay: a quick pick sits on top of the editor, terminal, settings - anything. */
+function showPicker(context) {
+  if (quickPick) {
+    quickPick.show();
+    return;
+  }
+  const name = config().get('name', 'Pet');
+
+  const qp = vscode.window.createQuickPick();
+  quickPick = qp;
+  qp.title = titleFor(context);
+  qp.placeholder = 'r / p / s then Enter — Esc to leave';
+  qp.matchOnDescription = true;
+  qp.items = MOVES.map((move) => ({
+    label: HAND[move] + '  ' + move.charAt(0).toUpperCase() + move.slice(1),
+    description: move.charAt(0),
+    move
+  }));
+
+  pet.poke('play', 4000);
+
+  qp.onDidAccept(async () => {
+    const pick = /** @type {any} */ (qp.selectedItems[0]);
+    if (!pick || !pick.move) return;
+
+    const you = pick.move;
+    const them = MOVES[Math.floor(Math.random() * MOVES.length)];
+    const stats = getStats(context);
+    let verdict;
+
+    if (you === them) {
+      stats.draws += 1;
+      stats.happiness = Math.min(100, stats.happiness + 3);
+      verdict = 'Draw.';
+      pet.poke('play', 2500);
+    } else if (BEATS[you] === them) {
+      stats.wins += 1;
+      stats.streak += 1;
+      stats.best = Math.max(stats.best, stats.streak);
+      stats.happiness = Math.min(100, stats.happiness + 4);
+      verdict = stats.streak > 2 ? 'You win — ' + stats.streak + ' in a row!' : 'You win!';
+      pet.poke('happy', 2500);
+    } else {
+      stats.losses += 1;
+      stats.streak = 0;
+      stats.happiness = Math.min(100, stats.happiness + 8);
+      verdict = name + ' wins.';
+      pet.poke('love', 2500);
+    }
+
+    await context.globalState.update('codepet.stats', stats);
+    refresh(context);
+
+    qp.title = titleFor(context, { you, them, verdict });
+    qp.value = '';
+  });
+
+  qp.onDidHide(() => {
+    qp.dispose();
+    quickPick = undefined;
+  });
+
+  qp.show();
+}
+
+function deactivate() {
+  pet.dispose();
+}
+
+module.exports = { activate, deactivate };

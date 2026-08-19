@@ -1,0 +1,190 @@
+const vscode = require('vscode');
+
+/**
+ * The pet is drawn as an `after` text decoration pinned to the end of a line in the
+ * active editor, so it floats over your code without taking any layout. Each frame is
+ * a distinct decoration type (contentText is fixed per type), so frames are cached.
+ */
+
+const SPECIES = {
+  cat:    { walk: '\u{1F408}', rest: '\u{1F431}', label: 'Cat' },
+  dog:    { walk: '\u{1F415}', rest: '\u{1F436}', label: 'Dog' },
+  duck:   { walk: '\u{1F986}', rest: '\u{1F423}', label: 'Duck' },
+  crab:   { walk: '\u{1F980}', rest: '\u{1F980}', label: 'Crab' },
+  snake:  { walk: '\u{1F40D}', rest: '\u{1F40D}', label: 'Snake' },
+  ghost:  { walk: '\u{1F47B}', rest: '\u{1F47B}', label: 'Ghost' },
+  robot:  { walk: '\u{1F916}', rest: '\u{1F916}', label: 'Robot' },
+  dragon: { walk: '\u{1F409}', rest: '\u{1F432}', label: 'Dragon' }
+};
+
+const BUBBLE = {
+  idle: '',
+  sleep: '\u{1F4A4}',
+  happy: '\u2728',
+  love: '\u2764\uFE0F',
+  alert: '\u2757',
+  play: '\u{1F3AE}',
+  sad: '\u{1F4A7}'
+};
+
+const NBSP = '\u00A0';
+const TICK_MS = 240;
+const MAX_X = 14;          // how far past end-of-line the pet may wander, in half-spaces
+const SLEEP_AFTER_MS = 45000;
+const CACHE_LIMIT = 240;
+
+class Pet {
+  constructor() {
+    this.species = 'cat';
+    this.follow = true;
+    this.line = 0;
+    this.x = 2;
+    this.dir = 1;
+    this.step = 0;
+    this.mood = 'idle';
+    this.baseline = 'idle';   // what it goes back to: 'idle', or 'sad' when neglected
+    this.moodUntil = 0;
+    this.lastActivity = Date.now();
+    this.timer = undefined;
+    /** @type {Map<string, vscode.TextEditorDecorationType>} */
+    this.cache = new Map();
+    /** @type {vscode.TextEditorDecorationType | undefined} */
+    this.shown = undefined;
+    /** @type {vscode.TextEditor | undefined} */
+    this.shownIn = undefined;
+  }
+
+  start() {
+    if (this.timer) return;
+    this.timer = setInterval(() => this.tick(), TICK_MS);
+  }
+
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    this.clear();
+  }
+
+  dispose() {
+    this.stop();
+    for (const type of this.cache.values()) type.dispose();
+    this.cache.clear();
+  }
+
+  /** Something happened in the editor — wake up and, for a moment, feel about it. */
+  poke(mood, ms) {
+    this.lastActivity = Date.now();
+    if (this.mood === 'sleep') this.mood = this.baseline;
+    if (!mood) return;
+    this.mood = mood;
+    this.moodUntil = Date.now() + (ms || 2500);
+  }
+
+  isAsleep() {
+    return this.mood === 'sleep';
+  }
+
+  glyph() {
+    const s = SPECIES[this.species] || SPECIES.cat;
+    return this.mood === 'sleep' ? s.rest : s.walk;
+  }
+
+  tick() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.scheme === 'output') {
+      this.clear();
+      return;
+    }
+
+    const now = Date.now();
+    if (this.moodUntil && now > this.moodUntil) {
+      this.mood = this.baseline;
+      this.moodUntil = 0;
+    }
+    if (this.mood === this.baseline && now - this.lastActivity > SLEEP_AFTER_MS) this.mood = 'sleep';
+
+    const visible = editor.visibleRanges[0];
+    if (!visible) return;
+    const top = visible.start.line;
+    const bottom = Math.max(top, visible.end.line - 1);
+
+    if (this.line < top || this.line > bottom) this.line = clamp(this.line, top, bottom);
+
+    if (this.mood !== 'sleep') {
+      const target = this.follow
+        ? clamp(editor.selection.active.line, top, bottom)
+        : this.line;
+
+      if (this.line < target) this.line += 1;
+      else if (this.line > target) this.line -= 1;
+      else {
+        this.x += this.dir;
+        if (this.x <= 0 || this.x >= MAX_X) {
+          this.dir *= -1;
+          this.x = clamp(this.x, 0, MAX_X);
+        } else if (Math.random() < 0.07) {
+          this.dir *= -1;
+        }
+      }
+      this.step ^= 1;
+    }
+
+    this.render(editor);
+  }
+
+  render(editor) {
+    const line = clamp(this.line, 0, editor.document.lineCount - 1);
+    const end = editor.document.lineAt(line).range.end;
+    const bubble = BUBBLE[this.mood] ? BUBBLE[this.mood] + NBSP : '';
+    const text = NBSP.repeat(2 + this.x) + bubble + this.glyph();
+    const bob = this.mood === 'sleep' || this.step === 0 ? 0 : -2;
+    const type = this.typeFor(text, bob);
+
+    // Wipe the previous frame, whether it was another type or the same one in another editor.
+    if (this.shown && this.shownIn && (this.shown !== type || this.shownIn !== editor)) {
+      try { this.shownIn.setDecorations(this.shown, []); } catch (_) { /* editor closed */ }
+    }
+
+    editor.setDecorations(type, [new vscode.Range(end, end)]);
+    this.shown = type;
+    this.shownIn = editor;
+  }
+
+  clear() {
+    if (this.shown && this.shownIn) {
+      try { this.shownIn.setDecorations(this.shown, []); } catch (_) { /* editor closed */ }
+    }
+    this.shown = undefined;
+    this.shownIn = undefined;
+  }
+
+  typeFor(contentText, bob) {
+    const key = bob + '|' + contentText;
+    let type = this.cache.get(key);
+    if (type) return type;
+
+    if (this.cache.size >= CACHE_LIMIT) {
+      const oldest = this.cache.keys().next().value;
+      const stale = this.cache.get(oldest);
+      if (stale) stale.dispose();
+      this.cache.delete(oldest);
+    }
+
+    type = vscode.window.createTextEditorDecorationType({
+      after: {
+        contentText,
+        // `top` rides in on textDecoration; it is the only CSS hook decorations expose.
+        textDecoration: 'none; position: relative; top: ' + bob + 'px; pointer-events: none;'
+      },
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed
+    });
+    this.cache.set(key, type);
+    return type;
+  }
+}
+
+function clamp(n, lo, hi) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+module.exports = { Pet, SPECIES, BUBBLE };

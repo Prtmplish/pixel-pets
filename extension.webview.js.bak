@@ -1,0 +1,264 @@
+const vscode = require('vscode');
+
+const EMPTY_SCORE = { wins: 0, losses: 0, draws: 0, streak: 0, best: 0 };
+
+/** @type {vscode.WebviewPanel | undefined} */
+let panel;
+/** @type {vscode.StatusBarItem | undefined} */
+let statusBar;
+
+function activate(context) {
+  statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusBar.command = 'rps.play';
+  context.subscriptions.push(statusBar);
+  renderStatusBar(context);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('rps.play', () => showPanel(context)),
+    vscode.commands.registerCommand('rps.resetScore', async () => {
+      await context.globalState.update('rps.score', EMPTY_SCORE);
+      renderStatusBar(context);
+      if (panel) panel.webview.postMessage({ type: 'score', score: EMPTY_SCORE });
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('rps.showStatusBar')) renderStatusBar(context);
+    })
+  );
+}
+
+function getScore(context) {
+  return Object.assign({}, EMPTY_SCORE, context.globalState.get('rps.score', EMPTY_SCORE));
+}
+
+function renderStatusBar(context) {
+  if (!statusBar) return;
+  if (!vscode.workspace.getConfiguration('rps').get('showStatusBar', true)) {
+    statusBar.hide();
+    return;
+  }
+  const s = getScore(context);
+  statusBar.text = '$(game) ' + s.wins + '-' + s.losses + '-' + s.draws;
+  statusBar.tooltip = 'Rock Paper Scissors — ' + s.wins + ' wins, ' + s.losses +
+    ' losses, ' + s.draws + ' draws (best streak ' + s.best + ')';
+  statusBar.show();
+}
+
+function showPanel(context) {
+  const beside = vscode.workspace.getConfiguration('rps').get('openBeside', true);
+  const column = beside ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active;
+
+  if (panel) {
+    panel.reveal(column, true);
+    return;
+  }
+
+  panel = vscode.window.createWebviewPanel(
+    'rps.game',
+    'Rock Paper Scissors',
+    { viewColumn: column, preserveFocus: false },
+    { enableScripts: true, retainContextWhenHidden: true }
+  );
+
+  panel.webview.html = getHtml(getScore(context));
+
+  panel.webview.onDidReceiveMessage(async (msg) => {
+    if (msg && msg.type === 'score') {
+      await context.globalState.update('rps.score', msg.score);
+      renderStatusBar(context);
+    }
+  }, undefined, context.subscriptions);
+
+  panel.onDidDispose(() => { panel = undefined; }, null, context.subscriptions);
+}
+
+function makeNonce() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let text = '';
+  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
+  return text;
+}
+
+function getHtml(score) {
+  const nonce = makeNonce();
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rock Paper Scissors</title>
+<style>
+  body {
+    font-family: var(--vscode-font-family);
+    color: var(--vscode-foreground);
+    background: var(--vscode-editor-background);
+    display: flex; flex-direction: column; align-items: center;
+    gap: 18px; padding: 24px 16px; margin: 0;
+  }
+  h1 { font-size: 1.05rem; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  .board {
+    display: flex; align-items: center; justify-content: center; gap: 24px;
+    font-size: 3.2rem; line-height: 1; min-height: 70px; user-select: none;
+  }
+  .hand.shake { animation: shake .45s ease; }
+  @keyframes shake {
+    0%, 100% { transform: rotate(0) translateY(0); }
+    25% { transform: rotate(-12deg) translateY(-10px); }
+    75% { transform: rotate(12deg) translateY(-10px); }
+  }
+  .vs { font-size: .95rem; opacity: .55; }
+  .verdict { min-height: 1.6em; font-size: 1rem; font-weight: 600; text-align: center; }
+  .verdict.win { color: var(--vscode-testing-iconPassed, #3fb950); }
+  .verdict.lose { color: var(--vscode-testing-iconFailed, #f85149); }
+  .verdict.draw { opacity: .7; }
+  .choices { display: flex; gap: 10px; }
+  .choices button {
+    font-family: inherit; font-size: 1.6rem; cursor: pointer; line-height: 1;
+    background: var(--vscode-button-secondaryBackground, rgba(127,127,127,.18));
+    color: var(--vscode-button-secondaryForeground, inherit);
+    border: 1px solid var(--vscode-contrastBorder, transparent);
+    border-radius: 10px; padding: 12px 18px;
+  }
+  .choices button:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(127,127,127,.3)); }
+  button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  .choices button:disabled { opacity: .5; cursor: default; }
+  .scores { display: flex; gap: 20px; font-size: .72rem; opacity: .85; letter-spacing: .06em; }
+  .scores b { display: block; font-size: 1.25rem; font-weight: 600; text-align: center; letter-spacing: 0; }
+  .hint { font-size: .72rem; opacity: .55; text-align: center; }
+  .reset {
+    font-family: inherit; font-size: .72rem; padding: 4px 10px; cursor: pointer;
+    background: transparent; border: none; border-radius: 6px;
+    color: var(--vscode-textLink-foreground);
+  }
+</style>
+</head>
+<body>
+  <h1>Rock Paper Scissors</h1>
+
+  <div class="board">
+    <span class="hand" id="you">\u{1F91C}</span>
+    <span class="vs">vs</span>
+    <span class="hand" id="cpu">\u{1F91B}</span>
+  </div>
+
+  <div class="verdict" id="verdict">Pick one — best of forever.</div>
+
+  <div class="choices">
+    <button data-move="rock" title="Rock (R)">\u{1FAA8}</button>
+    <button data-move="paper" title="Paper (P)">\u{1F4C4}</button>
+    <button data-move="scissors" title="Scissors (S)">✂️</button>
+  </div>
+
+  <div class="scores">
+    <div>WINS<b id="wins">0</b></div>
+    <div>LOSSES<b id="losses">0</b></div>
+    <div>DRAWS<b id="draws">0</b></div>
+    <div>STREAK<b id="streak">0</b></div>
+    <div>BEST<b id="best">0</b></div>
+  </div>
+
+  <button class="reset" id="reset">reset score</button>
+  <div class="hint">Press R / P / S to throw. Ctrl+Alt+R reopens this panel.</div>
+
+<script nonce="${nonce}">
+  const vscode = acquireVsCodeApi();
+  const EMOJI = { rock: '\u{1FAA8}', paper: '\u{1F4C4}', scissors: '✂️' };
+  const BEATS = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
+  const MOVES = Object.keys(BEATS);
+
+  let score = ${JSON.stringify(score)};
+  let busy = false;
+
+  const el = (id) => document.getElementById(id);
+  const buttons = () => document.querySelectorAll('.choices button');
+
+  function paint() {
+    el('wins').textContent = score.wins;
+    el('losses').textContent = score.losses;
+    el('draws').textContent = score.draws;
+    el('streak').textContent = score.streak;
+    el('best').textContent = score.best;
+  }
+
+  function play(move) {
+    if (busy) return;
+    busy = true;
+    buttons().forEach((b) => { b.disabled = true; });
+
+    const you = el('you');
+    const cpu = el('cpu');
+    const verdict = el('verdict');
+
+    you.textContent = '\u{1F91C}';
+    cpu.textContent = '\u{1F91B}';
+    you.classList.add('shake');
+    cpu.classList.add('shake');
+    verdict.className = 'verdict';
+    verdict.textContent = 'Rock… paper… scissors…';
+
+    setTimeout(() => {
+      const theirs = MOVES[Math.floor(Math.random() * MOVES.length)];
+      you.classList.remove('shake');
+      cpu.classList.remove('shake');
+      you.textContent = EMOJI[move];
+      cpu.textContent = EMOJI[theirs];
+
+      if (move === theirs) {
+        score.draws += 1;
+        verdict.textContent = 'Draw.';
+        verdict.className = 'verdict draw';
+      } else if (BEATS[move] === theirs) {
+        score.wins += 1;
+        score.streak += 1;
+        score.best = Math.max(score.best, score.streak);
+        verdict.textContent = score.streak > 2
+          ? 'You win — ' + score.streak + ' in a row!'
+          : 'You win!';
+        verdict.className = 'verdict win';
+      } else {
+        score.losses += 1;
+        score.streak = 0;
+        verdict.textContent = 'You lose.';
+        verdict.className = 'verdict lose';
+      }
+
+      paint();
+      vscode.postMessage({ type: 'score', score: score });
+      busy = false;
+      buttons().forEach((b) => { b.disabled = false; });
+    }, 550);
+  }
+
+  buttons().forEach((b) => {
+    b.addEventListener('click', () => play(b.dataset.move));
+  });
+
+  el('reset').addEventListener('click', () => {
+    score = { wins: 0, losses: 0, draws: 0, streak: 0, best: 0 };
+    paint();
+    vscode.postMessage({ type: 'score', score: score });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const key = e.key.toLowerCase();
+    if (key === 'r') play('rock');
+    else if (key === 'p') play('paper');
+    else if (key === 's') play('scissors');
+  });
+
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'score') {
+      score = e.data.score;
+      paint();
+    }
+  });
+
+  paint();
+</script>
+</body>
+</html>`;
+}
+
+function deactivate() {}
+
+module.exports = { activate, deactivate };

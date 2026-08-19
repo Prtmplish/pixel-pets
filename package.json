@@ -1,0 +1,114 @@
+{
+  "name": "pixel-pets",
+  "displayName": "Pixel Pets",
+  "description": "A pixel-art pet that lives in your Explorer sidebar. Throw it a ball, pet it, and play rock paper scissors while your build runs.",
+  "version": "0.2.0",
+  "publisher": "607e6476-e564-6ddc-ad3d-e9db3e10d08f",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["pet", "pets", "pixel art", "fun", "companion"],
+  "galleryBanner": {
+    "color": "#2b1a2d",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prtmplish/pixel-pets.git"
+  },
+  "bugs": {
+    "url": "https://github.com/prtmplish/pixel-pets/issues"
+  },
+  "homepage": "https://github.com/prtmplish/pixel-pets#readme",
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "type": "webview",
+          "id": "pets.view",
+          "name": "Pixel Pets",
+          "visibility": "visible"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "pets.throwBall",
+        "title": "Throw Ball",
+        "category": "Pixel Pets",
+        "icon": "$(circle-large-outline)"
+      },
+      {
+        "command": "pets.choose",
+        "title": "Choose Pet",
+        "category": "Pixel Pets",
+        "icon": "$(smiley)"
+      },
+      {
+        "command": "pets.cycleTheme",
+        "title": "Next Scene",
+        "category": "Pixel Pets",
+        "icon": "$(paintcan)"
+      },
+      {
+        "command": "pets.play",
+        "title": "Play Rock Paper Scissors",
+        "category": "Pixel Pets",
+        "icon": "$(game)"
+      },
+      {
+        "command": "pets.resetScore",
+        "title": "Reset Score",
+        "category": "Pixel Pets"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "pets.throwBall", "when": "view == pets.view", "group": "navigation@1" },
+        { "command": "pets.choose", "when": "view == pets.view", "group": "navigation@2" },
+        { "command": "pets.cycleTheme", "when": "view == pets.view", "group": "navigation@3" },
+        { "command": "pets.play", "when": "view == pets.view", "group": "navigation@4" },
+        { "command": "pets.resetScore", "when": "view == pets.view" }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "pets.play",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r"
+      }
+    ],
+    "configuration": {
+      "title": "Pixel Pets",
+      "properties": {
+        "pets.species": {
+          "type": "string",
+          "default": "cat",
+          "enum": ["cat", "dog", "fox", "ghost"],
+          "description": "Who lives in the Explorer."
+        },
+        "pets.theme": {
+          "type": "string",
+          "default": "forest",
+          "enum": ["forest", "night", "snow"],
+          "enumDescriptions": [
+            "Autumn woods at dusk.",
+            "Starlit pines with fireflies.",
+            "Snowfall over pale blue firs."
+          ],
+          "description": "The scene the pet lives in."
+        },
+        "pets.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the rock-paper-scissors score in the status bar."
+        }
+      }
+    }
+  }
+}
